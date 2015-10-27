@@ -2806,7 +2806,8 @@ var ts;
                 "commonjs": 1,
                 "amd": 2,
                 "system": 4,
-                "umd": 3
+                "umd": 3,
+                "extjs": 99
             },
             description: ts.Diagnostics.Specify_module_code_generation_Colon_commonjs_amd_system_or_umd,
             paramType: ts.Diagnostics.KIND,
@@ -9014,7 +9015,8 @@ var ts;
             isImplementationOfOverload: isImplementationOfOverload,
             getAliasedSymbol: resolveAlias,
             getEmitResolver: getEmitResolver,
-            getExportsOfModule: getExportsOfModuleAsArray
+            getExportsOfModule: getExportsOfModuleAsArray,
+            resolveName: resolveName
         };
         var unknownSymbol = createSymbol(4 | 67108864, "unknown");
         var resolvingSymbol = createSymbol(67108864, "__resolving__");
@@ -18213,7 +18215,7 @@ var ts;
             }
             var symbol = getNodeLinks(node).resolvedSymbol;
             if (symbol && (symbol.flags & 8)) {
-                if (ts.isConstEnumDeclaration(symbol.valueDeclaration.parent)) {
+                if (ts.isConstEnumDeclaration(symbol.valueDeclaration.parent) || compilerOptions.module === 99) {
                     return getEnumMemberValue(symbol.valueDeclaration);
                 }
             }
@@ -18439,7 +18441,11 @@ var ts;
                 getReferencedValueDeclaration: getReferencedValueDeclaration,
                 serializeTypeOfNode: serializeTypeOfNode,
                 serializeParameterTypesOfNode: serializeParameterTypesOfNode,
-                serializeReturnTypeOfNode: serializeReturnTypeOfNode
+                serializeReturnTypeOfNode: serializeReturnTypeOfNode,
+                getFullyQualifiedName: getFullyQualifiedName,
+                getTypeFromTypeNode: getTypeFromTypeNode,
+                getNodeLinks: getNodeLinks,
+                getSuperContainer: ts.getSuperContainer
             };
         }
         function initializeTypeChecker() {
@@ -20798,6 +20804,7 @@ var ts;
             var increaseIndent = writer.increaseIndent;
             var decreaseIndent = writer.decreaseIndent;
             var currentSourceFile;
+            var currentClass;
             var exportFunctionForFile;
             var generatedNameSet = {};
             var nodeToGeneratedName = [];
@@ -21617,12 +21624,23 @@ var ts;
                 }
             }
             function emitExpressionIdentifier(node) {
-                var substitution = resolver.getExpressionNameSubstitution(node, getGeneratedNameForNode);
-                if (substitution) {
-                    write(substitution);
+                if (compilerOptions.module === 99) {
+                    var rsymbol = resolver.getNodeLinks(node).resolvedSymbol;
+                    if (rsymbol) {
+                        write(resolver.getFullyQualifiedName(rsymbol.exportSymbol || rsymbol));
+                    }
+                    else {
+                        writeTextOfNode(currentSourceFile, node);
+                    }
                 }
                 else {
-                    writeTextOfNode(currentSourceFile, node);
+                    var substitution = resolver.getExpressionNameSubstitution(node, getGeneratedNameForNode);
+                    if (substitution) {
+                        write(substitution);
+                    }
+                    else {
+                        writeTextOfNode(currentSourceFile, node);
+                    }
                 }
             }
             function getGeneratedNameForIdentifier(node) {
@@ -21661,8 +21679,21 @@ var ts;
                     write("this");
                 }
             }
+            function emitExtJSMethodSuperClass(node, isConstructor) {
+                if (currentClass) {
+                    write(getDeclClassFullName(currentClass));
+                    write('.superclass');
+                    write(isConstructor ? '.constructor' : '');
+                }
+                else {
+                    write('fail to emit super call');
+                }
+            }
             function emitSuper(node) {
-                if (languageVersion >= 2) {
+                if (compilerOptions.module === 99) {
+                    emitExtJSMethodSuperClass(node);
+                }
+                else if (languageVersion >= 2) {
                     write("super");
                 }
                 else {
@@ -22126,7 +22157,12 @@ var ts;
                 }
                 var superCall = false;
                 if (node.expression.kind === 91) {
-                    emitSuper(node.expression);
+                    if (compilerOptions.module === 99) {
+                        emitExtJSMethodSuperClass(node.expression, true);
+                    }
+                    else {
+                        emitSuper(node.expression);
+                    }
                     superCall = true;
                 }
                 else {
@@ -22340,8 +22376,10 @@ var ts;
                     emitToken(15, node.statements.end);
                     return;
                 }
-                emitToken(14, node.pos);
-                increaseIndent();
+                if (compilerOptions.module !== 99 || node.kind !== 207) {
+                    emitToken(14, node.pos);
+                    increaseIndent();
+                }
                 scopeEmitStart(node.parent);
                 if (node.kind === 207) {
                     ts.Debug.assert(node.parent.kind === 206);
@@ -22351,9 +22389,11 @@ var ts;
                 if (node.kind === 207) {
                     emitTempDeclarations(true);
                 }
-                decreaseIndent();
-                writeLine();
-                emitToken(15, node.statements.end);
+                if (compilerOptions.module !== 99 || node.kind !== 207) {
+                    decreaseIndent();
+                    writeLine();
+                    emitToken(15, node.statements.end);
+                }
                 scopeEmitEnd();
             }
             function emitEmbeddedStatement(node) {
@@ -22718,12 +22758,27 @@ var ts;
                 var container = getContainingModule(node);
                 write(container ? getGeneratedNameForNode(container) : "exports");
             }
+            function getExtJSModuleFullName(container) {
+                var parts = [];
+                while (container && container.kind == 206) {
+                    parts.unshift(container.name.text);
+                    container = container.parent;
+                }
+                return parts.join('.');
+            }
             function emitModuleMemberName(node) {
                 emitStart(node.name);
                 if (ts.getCombinedNodeFlags(node) & 1) {
                     var container = getContainingModule(node);
                     if (container) {
-                        write(getGeneratedNameForNode(container));
+                        if (compilerOptions.module === 99 && node.kind == 199) {
+                            write("Ext.ns('");
+                            write(getExtJSModuleFullName(container));
+                            write("')");
+                        }
+                        else {
+                            write(getGeneratedNameForNode(container));
+                        }
                         write(".");
                     }
                     else if (languageVersion < 2 && compilerOptions.module !== 4) {
@@ -23696,12 +23751,224 @@ var ts;
                 return emitClassLikeDeclaration(node);
             }
             function emitClassLikeDeclaration(node) {
-                if (languageVersion < 2) {
+                if (compilerOptions.module === 99) {
+                    emitClassLikeDeclarationForExtJS(node);
+                }
+                else if (languageVersion < 2) {
                     emitClassLikeDeclarationBelowES6(node);
                 }
                 else {
                     emitClassLikeDeclarationForES6AndHigher(node);
                 }
+            }
+            function emitClassLikeDeclarationForExtJS(node) {
+                emitLeadingComments(node);
+                write("Ext.define('");
+                write(getDeclClassFullName(node));
+                write("', {");
+                var baseTypeNode = ts.getClassExtendsHeritageClauseElement(node);
+                increaseIndent();
+                scopeEmitStart(node);
+                writeLine();
+                currentClass = node;
+                emitExtJSClassMembers(node, emitConstructorOfClass);
+                currentClass = null;
+                writeLine();
+                decreaseIndent();
+                writeLine();
+                writeLine();
+                scopeEmitEnd();
+                write("});");
+                emitEnd(node);
+                emitTrailingComments(node);
+                function emitConstructorOfClass() {
+                    ts.forEach(node.members, function (member) {
+                        if (member.kind === 136 && !member.body) {
+                            emitOnlyPinnedOrTripleSlashComments(member);
+                        }
+                    });
+                    var ctor = ts.getFirstConstructorWithBody(node);
+                    if (!ctor)
+                        return;
+                    if (ctor) {
+                        emitLeadingComments(ctor);
+                    }
+                    emitStart(ctor || node);
+                    write("constructor : function ");
+                    emit(node.name);
+                    emitSignatureParameters(ctor);
+                    write(" {");
+                    scopeEmitStart(node, "constructor");
+                    increaseIndent();
+                    if (ctor) {
+                        emitDetachedComments(ctor.body.statements);
+                    }
+                    emitCaptureThisForNodeIfNecessary(node);
+                    if (ctor) {
+                        emitDefaultValueAssignments(ctor);
+                        emitRestParameter(ctor);
+                        if (baseTypeNode) {
+                            var superCall = findInitialSuperCall(ctor);
+                            if (superCall) {
+                                writeLine();
+                                emit(superCall);
+                            }
+                        }
+                        emitParameterPropertyAssignments(ctor);
+                    }
+                    else {
+                        if (baseTypeNode) {
+                            writeLine();
+                            emitStart(baseTypeNode);
+                            write("this.callParent(this, arguments);");
+                            emitEnd(baseTypeNode);
+                        }
+                    }
+                    if (ctor) {
+                        var statements = ctor.body.statements;
+                        if (superCall)
+                            statements = statements.slice(1);
+                        emitLines(statements);
+                    }
+                    writeLine();
+                    if (ctor) {
+                        emitLeadingCommentsOfPosition(ctor.body.statements.end);
+                    }
+                    decreaseIndent();
+                    emitToken(15, ctor ? ctor.body.statements.end : node.members.end);
+                    scopeEmitEnd();
+                    emitEnd(ctor || node);
+                    if (ctor) {
+                        emitTrailingComments(ctor);
+                    }
+                }
+            }
+            function emitExtJSClassMembers(node, emitConstructorOfClass) {
+                var totalStatic = 0;
+                var totalInstance = 0;
+                var emitted = 0;
+                var baseTypeNode = ts.getClassExtendsHeritageClauseElement(node);
+                ts.forEach(node.members, function (member) {
+                    var emit = hasClassMemberBody(member);
+                    totalStatic += ((member.flags & 128) && emit) ? 1 : 0;
+                    totalInstance += (!(member.flags & 128) && emit) ? 1 : 0;
+                });
+                if (baseTypeNode) {
+                    writeLine();
+                    emitStart(baseTypeNode);
+                    write("extend : '");
+                    write(getTypeNodeFullName(baseTypeNode));
+                    write((totalStatic + totalInstance) > 0 ? "'," : "'");
+                    emitEnd(baseTypeNode);
+                }
+                var toemit = totalInstance + (totalStatic > 0 ? 1 : 0);
+                ts.forEach(node.members, function (member) {
+                    var lemitted = false;
+                    if (!(member.flags & 128)) {
+                        if (member.kind === 136) {
+                            if (member.body) {
+                                writeLine();
+                                emitConstructorOfClass();
+                                if (emitted < toemit - 1 || totalStatic > 0) {
+                                    write(',');
+                                }
+                                emitted++;
+                            }
+                        }
+                        else {
+                            emitted += emitExtJSClassMember(member, emitConstructorOfClass, toemit, emitted) ? 1 : 0;
+                        }
+                    }
+                });
+                if (totalStatic > 0) {
+                    writeLine();
+                    write('statics : {');
+                    increaseIndent();
+                    emitted = 0;
+                    ts.forEach(node.members, function (member) {
+                        if (member.flags & 128) {
+                            emitted += emitExtJSClassMember(member, emitConstructorOfClass, totalStatic, emitted) ? 1 : 0;
+                        }
+                    });
+                    decreaseIndent();
+                    writeLine();
+                    write('}');
+                }
+            }
+            function emitExtJSClassMember(member, emitConstructorOfClass, toemit, emitted) {
+                if (!hasClassMemberBody(member)) {
+                    emitOnlyPinnedOrTripleSlashComments(member);
+                    return false;
+                }
+                writeLine();
+                emitLeadingComments(member);
+                emitStart(member);
+                emitStart(member.name);
+                emit(member.name);
+                emitEnd(member.name);
+                write(" : ");
+                emitStart(member);
+                if (member.kind === 133 || member.kind === 132) {
+                    emit(member.initializer);
+                }
+                else {
+                    emitFunctionDeclaration(member);
+                }
+                emitEnd(member);
+                emitEnd(member);
+                if (emitted < toemit - 1) {
+                    write(',');
+                }
+                emitTrailingComments(member);
+                return true;
+            }
+            function getTypeNodeFullName(node) {
+                var type = resolver.getTypeFromTypeNode(node);
+                var name;
+                if (type && type.symbol) {
+                    name = resolver.getFullyQualifiedName(type.symbol);
+                }
+                else {
+                    var links = resolver.getNodeLinks(node);
+                    if (links && links.resolvedSymbol) {
+                        name = resolver.getFullyQualifiedName(links.resolvedSymbol);
+                    }
+                }
+                return name ? changeClassFullNameToCmdSupport(name) : 'UnknownType';
+            }
+            function isClassMemberMethod(node) {
+                return (node.kind === 136 || node.kind === 135 ||
+                    node.kind === 134 ||
+                    node.kind === 137 || node.kind === 138);
+            }
+            function hasClassMemberBody(node) {
+                if (isClassMemberMethod(node)) {
+                    return !!node.body;
+                }
+                if ((node.kind === 133 || node.kind === 132) &&
+                    node.initializer) {
+                    return true;
+                }
+                return false;
+            }
+            function getDeclClassFullName(pullDecl) {
+                var parts = [];
+                if (pullDecl) {
+                    parts.push(pullDecl.name.text);
+                    var moduleDecl = pullDecl.symbol.parent;
+                    while (moduleDecl) {
+                        parts.unshift(moduleDecl.name);
+                        moduleDecl = moduleDecl.parent;
+                    }
+                }
+                return changeClassFullNameToCmdSupport(parts);
+            }
+            function changeClassFullNameToCmdSupport(name) {
+                var parts = name.split ? name.split('.') : name;
+                if (parts[0] === 'ST') {
+                    parts[0] = 'Ext';
+                }
+                return parts.join('.');
             }
             function emitClassLikeDeclarationForES6AndHigher(node) {
                 var thisNodeIsDecorated = ts.nodeIsDecorated(node);
@@ -24102,8 +24369,45 @@ var ts;
                 var isConstEnum = ts.isConst(node);
                 return !isConstEnum || compilerOptions.preserveConstEnums || compilerOptions.isolatedModules;
             }
+            function emitExtJSEnumDeclaration(node) {
+                var isConstEnum = ts.isConst(node);
+                write("Ext.define('");
+                if (node.localSymbol && node.localSymbol.exportSymbol) {
+                    write(resolver.getFullyQualifiedName(node.localSymbol.exportSymbol));
+                }
+                else {
+                    emit(node.name);
+                }
+                write("', {");
+                writeLine();
+                increaseIndent();
+                write("singleton : true,");
+                ts.forEach(node.members, function (member) {
+                    writeLine();
+                    emitStart(member);
+                    emit(member.name);
+                    write(' : ');
+                    if (member.initializer && !isConstEnum) {
+                        emit(member.initializer);
+                    }
+                    else {
+                        write(resolver.getConstantValue(member).toString());
+                    }
+                    emitEnd(member);
+                    if (node.members.indexOf(member) < node.members.length - 1) {
+                        write(',');
+                    }
+                });
+                decreaseIndent();
+                writeLine();
+                write("});");
+            }
             function emitEnumDeclaration(node) {
                 if (!shouldEmitEnumDeclaration(node)) {
+                    return;
+                }
+                if (compilerOptions.module === 99) {
+                    emitExtJSEnumDeclaration(node);
                     return;
                 }
                 if (!shouldHoistDeclarationInSystemJsModule(node)) {
@@ -24206,7 +24510,8 @@ var ts;
                     return emitOnlyPinnedOrTripleSlashComments(node);
                 }
                 var hoistedInDeclarationScope = shouldHoistDeclarationInSystemJsModule(node);
-                var emitVarForModule = !hoistedInDeclarationScope && !isModuleMergedWithES6Class(node);
+                var isExtJS = (compilerOptions.module === 99);
+                var emitVarForModule = !hoistedInDeclarationScope && !isModuleMergedWithES6Class(node) && !isExtJS;
                 if (emitVarForModule) {
                     emitStart(node);
                     if (isES6ExportedDeclaration(node)) {
@@ -24218,12 +24523,14 @@ var ts;
                     emitEnd(node);
                     writeLine();
                 }
-                emitStart(node);
-                write("(function (");
-                emitStart(node.name);
-                write(getGeneratedNameForNode(node));
-                emitEnd(node.name);
-                write(") ");
+                if (!isExtJS) {
+                    emitStart(node);
+                    write("(function (");
+                    emitStart(node.name);
+                    write(getGeneratedNameForNode(node));
+                    emitEnd(node.name);
+                    write(") ");
+                }
                 if (node.body.kind === 207) {
                     var saveTempFlags = tempFlags;
                     var saveTempVariables = tempVariables;
@@ -24234,38 +24541,44 @@ var ts;
                     tempVariables = saveTempVariables;
                 }
                 else {
-                    write("{");
-                    increaseIndent();
-                    scopeEmitStart(node);
-                    emitCaptureThisForNodeIfNecessary(node);
-                    writeLine();
-                    emit(node.body);
-                    decreaseIndent();
-                    writeLine();
-                    var moduleBlock = getInnerMostModuleDeclarationFromDottedModule(node).body;
-                    emitToken(15, moduleBlock.statements.end);
-                    scopeEmitEnd();
-                }
-                write(")(");
-                if ((node.flags & 1) && !isES6ExportedDeclaration(node)) {
-                    emit(node.name);
-                    write(" = ");
-                }
-                emitModuleMemberName(node);
-                write(" || (");
-                emitModuleMemberName(node);
-                write(" = {}));");
-                emitEnd(node);
-                if (!isES6ExportedDeclaration(node) && node.name.kind === 65 && node.parent === currentSourceFile) {
-                    if (compilerOptions.module === 4 && (node.flags & 1)) {
+                    if (!isExtJS) {
+                        write("{");
+                        increaseIndent();
+                        scopeEmitStart(node);
+                        emitCaptureThisForNodeIfNecessary(node);
                         writeLine();
-                        write(exportFunctionForFile + "(\"");
-                        emitDeclarationName(node);
-                        write("\", ");
-                        emitDeclarationName(node);
-                        write(");");
                     }
-                    emitExportMemberAssignments(node.name);
+                    emit(node.body);
+                    if (!isExtJS) {
+                        decreaseIndent();
+                        writeLine();
+                        var moduleBlock = getInnerMostModuleDeclarationFromDottedModule(node).body;
+                        emitToken(15, moduleBlock.statements.end);
+                        scopeEmitEnd();
+                    }
+                }
+                if (!isExtJS) {
+                    write(")(");
+                    if ((node.flags & 1) && !isES6ExportedDeclaration(node)) {
+                        emit(node.name);
+                        write(" = ");
+                    }
+                    emitModuleMemberName(node);
+                    write(" || (");
+                    emitModuleMemberName(node);
+                    write(" = {}));");
+                    emitEnd(node);
+                    if (!isES6ExportedDeclaration(node) && node.name.kind === 65 && node.parent === currentSourceFile) {
+                        if (compilerOptions.module === 4 && (node.flags & 1)) {
+                            writeLine();
+                            write(exportFunctionForFile + "(\"");
+                            emitDeclarationName(node);
+                            write("\", ");
+                            emitDeclarationName(node);
+                            write(");");
+                        }
+                        emitExportMemberAssignments(node.name);
+                    }
                 }
             }
             function emitRequire(moduleName) {
@@ -25139,7 +25452,7 @@ var ts;
                 emitDetachedComments(node);
                 var startIndex = emitDirectivePrologues(node.statements, false);
                 if (!compilerOptions.noEmitHelpers) {
-                    if ((languageVersion < 2) && (!extendsEmitted && resolver.getNodeCheckFlags(node) & 8)) {
+                    if (compilerOptions.module !== 99 && (languageVersion < 2) && (!extendsEmitted && resolver.getNodeCheckFlags(node) & 8)) {
                         writeLines(extendsHelper);
                         extendsEmitted = true;
                     }

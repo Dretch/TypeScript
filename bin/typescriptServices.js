@@ -545,6 +545,8 @@ var ts;
         ModuleKind[ModuleKind["AMD"] = 2] = "AMD";
         ModuleKind[ModuleKind["UMD"] = 3] = "UMD";
         ModuleKind[ModuleKind["System"] = 4] = "System";
+        //@extjs module
+        ModuleKind[ModuleKind["ExtJS"] = 99] = "ExtJS";
     })(ts.ModuleKind || (ts.ModuleKind = {}));
     var ModuleKind = ts.ModuleKind;
     (function (NewLineKind) {
@@ -10850,7 +10852,8 @@ var ts;
             isImplementationOfOverload: isImplementationOfOverload,
             getAliasedSymbol: resolveAlias,
             getEmitResolver: getEmitResolver,
-            getExportsOfModule: getExportsOfModuleAsArray
+            getExportsOfModule: getExportsOfModuleAsArray,
+            resolveName: resolveName
         };
         var unknownSymbol = createSymbol(4 /* Property */ | 67108864 /* Transient */, "unknown");
         var resolvingSymbol = createSymbol(67108864 /* Transient */, "__resolving__");
@@ -21481,7 +21484,8 @@ var ts;
             var symbol = getNodeLinks(node).resolvedSymbol;
             if (symbol && (symbol.flags & 8 /* EnumMember */)) {
                 // inline property\index accesses only for const enums
-                if (ts.isConstEnumDeclaration(symbol.valueDeclaration.parent)) {
+                //@extjs aways emit enum value > allow use enum in class declaration before enum class loaded
+                if (ts.isConstEnumDeclaration(symbol.valueDeclaration.parent) || compilerOptions.module === 99 /* ExtJS */) {
                     return getEnumMemberValue(symbol.valueDeclaration);
                 }
             }
@@ -21753,7 +21757,12 @@ var ts;
                 getReferencedValueDeclaration: getReferencedValueDeclaration,
                 serializeTypeOfNode: serializeTypeOfNode,
                 serializeParameterTypesOfNode: serializeParameterTypesOfNode,
-                serializeReturnTypeOfNode: serializeReturnTypeOfNode
+                serializeReturnTypeOfNode: serializeReturnTypeOfNode,
+                //@extjs https://github.com/Microsoft/TypeScript/issues/1255
+                getFullyQualifiedName: getFullyQualifiedName,
+                getTypeFromTypeNode: getTypeFromTypeNode,
+                getNodeLinks: getNodeLinks,
+                getSuperContainer: ts.getSuperContainer
             };
         }
         function initializeTypeChecker() {
@@ -24296,6 +24305,10 @@ var ts;
         var sourceMapDataList = compilerOptions.sourceMap || compilerOptions.inlineSourceMap ? [] : undefined;
         var diagnostics = [];
         var newLine = host.getNewLine();
+        //https://github.com/Microsoft/TypeScript/issues/4532
+        //there is no way to set -m extj in visual studio plugin...
+        //lets hard code these for vs users...
+        //compilerOptions.module = ModuleKind.ExtJS;
         if (targetSourceFile === undefined) {
             ts.forEach(host.getSourceFiles(), function (sourceFile) {
                 if (ts.shouldEmitToOwnFile(sourceFile, compilerOptions)) {
@@ -24351,6 +24364,7 @@ var ts;
             var increaseIndent = writer.increaseIndent;
             var decreaseIndent = writer.decreaseIndent;
             var currentSourceFile;
+            var currentClass; //@extjs required (for now) to emit super calls > Class.superclass.method()
             // name of an exporter function if file is a System external module
             // System.register([...], function (<exporter>) {...})
             // exporting in System modules looks like:
@@ -25316,12 +25330,25 @@ var ts;
                 }
             }
             function emitExpressionIdentifier(node) {
-                var substitution = resolver.getExpressionNameSubstitution(node, getGeneratedNameForNode);
-                if (substitution) {
-                    write(substitution);
+                if (compilerOptions.module === 99 /* ExtJS */) {
+                    var rsymbol = resolver.getNodeLinks(node).resolvedSymbol; //@extjs
+                    if (rsymbol) {
+                        //full object path ex: Console.logInternal() may be emitted as Ext.util.deep.Console.logInternal()
+                        //caution: exportSymbol exists only in classes > modules is only symbol  
+                        write(resolver.getFullyQualifiedName(rsymbol.exportSymbol || rsymbol));
+                    }
+                    else {
+                        writeTextOfNode(currentSourceFile, node);
+                    }
                 }
                 else {
-                    writeTextOfNode(currentSourceFile, node);
+                    var substitution = resolver.getExpressionNameSubstitution(node, getGeneratedNameForNode);
+                    if (substitution) {
+                        write(substitution);
+                    }
+                    else {
+                        writeTextOfNode(currentSourceFile, node);
+                    }
                 }
             }
             function getGeneratedNameForIdentifier(node) {
@@ -25360,8 +25387,24 @@ var ts;
                     write("this");
                 }
             }
+            //@extjs TODO: probably there is simple way to get current class symbol
+            //we cannot use/assume this.callParent because one method can acess a different super method:
+            //showAt(){ super.show() } > super.show() cannot be emitted as this.callParent()
+            function emitExtJSMethodSuperClass(node, isConstructor) {
+                if (currentClass) {
+                    write(getDeclClassFullName(currentClass)); //emit base class
+                    write('.superclass');
+                    write(isConstructor ? '.constructor' : '');
+                }
+                else {
+                    write('fail to emit super call');
+                }
+            }
             function emitSuper(node) {
-                if (languageVersion >= 2 /* ES6 */) {
+                if (compilerOptions.module === 99 /* ExtJS */) {
+                    emitExtJSMethodSuperClass(node);
+                }
+                else if (languageVersion >= 2 /* ES6 */) {
                     write("super");
                 }
                 else {
@@ -25876,7 +25919,12 @@ var ts;
                 }
                 var superCall = false;
                 if (node.expression.kind === 91 /* SuperKeyword */) {
-                    emitSuper(node.expression);
+                    if (compilerOptions.module === 99 /* ExtJS */) {
+                        emitExtJSMethodSuperClass(node.expression, true);
+                    }
+                    else {
+                        emitSuper(node.expression);
+                    }
                     superCall = true;
                 }
                 else {
@@ -26137,8 +26185,10 @@ var ts;
                     emitToken(15 /* CloseBraceToken */, node.statements.end);
                     return;
                 }
-                emitToken(14 /* OpenBraceToken */, node.pos);
-                increaseIndent();
+                if (compilerOptions.module !== 99 /* ExtJS */ || node.kind !== 207 /* ModuleBlock */) {
+                    emitToken(14 /* OpenBraceToken */, node.pos);
+                    increaseIndent();
+                }
                 scopeEmitStart(node.parent);
                 if (node.kind === 207 /* ModuleBlock */) {
                     ts.Debug.assert(node.parent.kind === 206 /* ModuleDeclaration */);
@@ -26148,9 +26198,11 @@ var ts;
                 if (node.kind === 207 /* ModuleBlock */) {
                     emitTempDeclarations(true);
                 }
-                decreaseIndent();
-                writeLine();
-                emitToken(15 /* CloseBraceToken */, node.statements.end);
+                if (compilerOptions.module !== 99 /* ExtJS */ || node.kind !== 207 /* ModuleBlock */) {
+                    decreaseIndent();
+                    writeLine();
+                    emitToken(15 /* CloseBraceToken */, node.statements.end);
+                }
                 scopeEmitEnd();
             }
             function emitEmbeddedStatement(node) {
@@ -26547,12 +26599,28 @@ var ts;
                 var container = getContainingModule(node);
                 write(container ? getGeneratedNameForNode(container) : "exports");
             }
+            //@extjsemitter helper
+            function getExtJSModuleFullName(container) {
+                var parts = [];
+                while (container && container.kind == 206 /* ModuleDeclaration */) {
+                    parts.unshift(container.name.text);
+                    container = container.parent;
+                }
+                return parts.join('.');
+            }
             function emitModuleMemberName(node) {
                 emitStart(node.name);
                 if (ts.getCombinedNodeFlags(node) & 1 /* Export */) {
                     var container = getContainingModule(node);
                     if (container) {
-                        write(getGeneratedNameForNode(container));
+                        if (compilerOptions.module === 99 /* ExtJS */ && node.kind == 199 /* VariableDeclaration */) {
+                            write("Ext.ns('");
+                            write(getExtJSModuleFullName(container));
+                            write("')");
+                        }
+                        else {
+                            write(getGeneratedNameForNode(container));
+                        }
                         write(".");
                     }
                     else if (languageVersion < 2 /* ES6 */ && compilerOptions.module !== 4 /* System */) {
@@ -27598,12 +27666,234 @@ var ts;
                 return emitClassLikeDeclaration(node);
             }
             function emitClassLikeDeclaration(node) {
-                if (languageVersion < 2 /* ES6 */) {
+                if (compilerOptions.module === 99 /* ExtJS */) {
+                    emitClassLikeDeclarationForExtJS(node);
+                }
+                else if (languageVersion < 2 /* ES6 */) {
                     emitClassLikeDeclarationBelowES6(node);
                 }
                 else {
                     emitClassLikeDeclarationForES6AndHigher(node);
                 }
+            }
+            function emitClassLikeDeclarationForExtJS(node) {
+                emitLeadingComments(node);
+                write("Ext.define('"); //write("var "); extjs
+                write(getDeclClassFullName(node)); //emit(node.name); extjs
+                write("', {"); //write(" = (function ("); extjs
+                var baseTypeNode = ts.getClassExtendsHeritageClauseElement(node);
+                increaseIndent();
+                scopeEmitStart(node);
+                writeLine();
+                currentClass = node; //@extjs
+                emitExtJSClassMembers(node, emitConstructorOfClass);
+                //emitMemberAssignments(node, NodeFlags.Static); 
+                currentClass = null; //@extjs
+                writeLine();
+                decreaseIndent();
+                writeLine();
+                writeLine();
+                scopeEmitEnd();
+                write("});");
+                emitEnd(node);
+                emitTrailingComments(node);
+                function emitConstructorOfClass() {
+                    // Emit the constructor overload pinned comments
+                    ts.forEach(node.members, function (member) {
+                        if (member.kind === 136 /* Constructor */ && !member.body) {
+                            emitOnlyPinnedOrTripleSlashComments(member);
+                        }
+                    });
+                    var ctor = ts.getFirstConstructorWithBody(node);
+                    if (!ctor)
+                        return; //lets extjs do the magic
+                    if (ctor) {
+                        emitLeadingComments(ctor);
+                    }
+                    emitStart(ctor || node);
+                    write("constructor : function ");
+                    emit(node.name);
+                    emitSignatureParameters(ctor);
+                    write(" {");
+                    scopeEmitStart(node, "constructor");
+                    increaseIndent();
+                    if (ctor) {
+                        emitDetachedComments(ctor.body.statements);
+                    }
+                    emitCaptureThisForNodeIfNecessary(node);
+                    if (ctor) {
+                        emitDefaultValueAssignments(ctor);
+                        emitRestParameter(ctor);
+                        if (baseTypeNode) {
+                            var superCall = findInitialSuperCall(ctor);
+                            if (superCall) {
+                                writeLine();
+                                emit(superCall);
+                            }
+                        }
+                        emitParameterPropertyAssignments(ctor);
+                    }
+                    else {
+                        if (baseTypeNode) {
+                            writeLine();
+                            emitStart(baseTypeNode);
+                            write("this.callParent(this, arguments);"); //write("_super.apply(this, arguments);"); extjs
+                            emitEnd(baseTypeNode);
+                        }
+                    }
+                    //emitMemberAssignments(node, /*nonstatic*/0);  @extjs dont initialize properties in a constructor instance > extjs style is in prototype
+                    if (ctor) {
+                        var statements = ctor.body.statements;
+                        if (superCall)
+                            statements = statements.slice(1);
+                        emitLines(statements);
+                    }
+                    writeLine();
+                    if (ctor) {
+                        emitLeadingCommentsOfPosition(ctor.body.statements.end);
+                    }
+                    decreaseIndent();
+                    emitToken(15 /* CloseBraceToken */, ctor ? ctor.body.statements.end : node.members.end);
+                    scopeEmitEnd();
+                    emitEnd(ctor || node);
+                    if (ctor) {
+                        emitTrailingComments(ctor);
+                    }
+                }
+            }
+            //@extjs helper
+            function emitExtJSClassMembers(node, emitConstructorOfClass) {
+                var totalStatic = 0;
+                var totalInstance = 0;
+                var emitted = 0;
+                var baseTypeNode = ts.getClassExtendsHeritageClauseElement(node);
+                ts.forEach(node.members, function (member) {
+                    var emit = hasClassMemberBody(member);
+                    totalStatic += ((member.flags & 128 /* Static */) && emit) ? 1 : 0;
+                    totalInstance += (!(member.flags & 128 /* Static */) && emit) ? 1 : 0;
+                });
+                if (baseTypeNode) {
+                    writeLine();
+                    emitStart(baseTypeNode);
+                    write("extend : '"); //extjs
+                    write(getTypeNodeFullName(baseTypeNode)); //extjs
+                    write((totalStatic + totalInstance) > 0 ? "'," : "'");
+                    emitEnd(baseTypeNode);
+                }
+                var toemit = totalInstance + (totalStatic > 0 ? 1 : 0);
+                ts.forEach(node.members, function (member) {
+                    var lemitted = false;
+                    if (!(member.flags & 128 /* Static */)) {
+                        if (member.kind === 136 /* Constructor */) {
+                            if (member.body) {
+                                writeLine();
+                                emitConstructorOfClass();
+                                if (emitted < toemit - 1 || totalStatic > 0) {
+                                    write(',');
+                                }
+                                emitted++;
+                            }
+                        }
+                        else {
+                            emitted += emitExtJSClassMember(member, emitConstructorOfClass, toemit, emitted) ? 1 : 0;
+                        }
+                    }
+                });
+                if (totalStatic > 0) {
+                    writeLine();
+                    write('statics : {');
+                    increaseIndent();
+                    emitted = 0;
+                    ts.forEach(node.members, function (member) {
+                        if (member.flags & 128 /* Static */) {
+                            emitted += emitExtJSClassMember(member, emitConstructorOfClass, totalStatic, emitted) ? 1 : 0;
+                        }
+                    });
+                    decreaseIndent();
+                    writeLine();
+                    write('}');
+                }
+            }
+            //@extjs helper
+            function emitExtJSClassMember(member, emitConstructorOfClass, toemit, emitted) {
+                if (!hasClassMemberBody(member)) {
+                    emitOnlyPinnedOrTripleSlashComments(member);
+                    return false;
+                }
+                writeLine();
+                emitLeadingComments(member);
+                emitStart(member);
+                emitStart(member.name);
+                emit(member.name);
+                emitEnd(member.name);
+                write(" : ");
+                emitStart(member);
+                if (member.kind === 133 /* PropertyDeclaration */ || member.kind === 132 /* PropertySignature */) {
+                    emit(member.initializer);
+                }
+                else {
+                    emitFunctionDeclaration(member);
+                }
+                emitEnd(member);
+                emitEnd(member);
+                if (emitted < toemit - 1) {
+                    write(',');
+                }
+                emitTrailingComments(member);
+                return true;
+            }
+            //@extjsemitter helper ///https://github.com/Microsoft/TypeScript/issues/1255
+            function getTypeNodeFullName(node) {
+                var type = resolver.getTypeFromTypeNode(node);
+                var name;
+                if (type && type.symbol) {
+                    name = resolver.getFullyQualifiedName(type.symbol);
+                }
+                else {
+                    var links = resolver.getNodeLinks(node);
+                    if (links && links.resolvedSymbol) {
+                        name = resolver.getFullyQualifiedName(links.resolvedSymbol);
+                    }
+                }
+                return name ? changeClassFullNameToCmdSupport(name) : 'UnknownType';
+            }
+            //@extjs helper
+            function isClassMemberMethod(node) {
+                return (node.kind === 136 /* Constructor */ || node.kind === 135 /* MethodDeclaration */ ||
+                    node.kind === 134 /* MethodSignature */ ||
+                    node.kind === 137 /* GetAccessor */ || node.kind === 138 /* SetAccessor */);
+            }
+            //@extjs helper
+            function hasClassMemberBody(node) {
+                if (isClassMemberMethod(node)) {
+                    return !!node.body;
+                }
+                if ((node.kind === 133 /* PropertyDeclaration */ || node.kind === 132 /* PropertySignature */) &&
+                    node.initializer) {
+                    return true;
+                }
+                return false;
+            }
+            //@extjsemitter helper
+            function getDeclClassFullName(pullDecl) {
+                var parts = [];
+                if (pullDecl) {
+                    parts.push(pullDecl.name.text);
+                    var moduleDecl = pullDecl.symbol.parent;
+                    while (moduleDecl) {
+                        parts.unshift(moduleDecl.name);
+                        moduleDecl = moduleDecl.parent;
+                    }
+                }
+                return changeClassFullNameToCmdSupport(parts);
+            }
+            function changeClassFullNameToCmdSupport(name) {
+                var parts = name.split ? name.split('.') : name;
+                //sencha cmd support > change ST to Ext > useful in projects with desktop an mobile app
+                if (parts[0] === 'ST') {
+                    parts[0] = 'Ext';
+                }
+                return parts.join('.');
             }
             function emitClassLikeDeclarationForES6AndHigher(node) {
                 var thisNodeIsDecorated = ts.nodeIsDecorated(node);
@@ -28146,9 +28436,47 @@ var ts;
                 var isConstEnum = ts.isConst(node);
                 return !isConstEnum || compilerOptions.preserveConstEnums || compilerOptions.isolatedModules;
             }
+            function emitExtJSEnumDeclaration(node) {
+                var isConstEnum = ts.isConst(node);
+                write("Ext.define('");
+                if (node.localSymbol && node.localSymbol.exportSymbol) {
+                    write(resolver.getFullyQualifiedName(node.localSymbol.exportSymbol));
+                }
+                else {
+                    emit(node.name);
+                }
+                write("', {");
+                writeLine();
+                increaseIndent();
+                write("singleton : true,");
+                ts.forEach(node.members, function (member) {
+                    writeLine();
+                    emitStart(member);
+                    emit(member.name);
+                    write(' : ');
+                    if (member.initializer && !isConstEnum) {
+                        emit(member.initializer);
+                    }
+                    else {
+                        write(resolver.getConstantValue(member).toString());
+                    }
+                    emitEnd(member);
+                    if (node.members.indexOf(member) < node.members.length - 1) {
+                        write(',');
+                    }
+                });
+                decreaseIndent();
+                writeLine();
+                write("});");
+                //TODO: const enums with Extjs? maybe its sencha cmd will raise a error if class isnot found...
+            }
             function emitEnumDeclaration(node) {
                 // const enums are completely erased during compilation.
                 if (!shouldEmitEnumDeclaration(node)) {
+                    return;
+                }
+                if (compilerOptions.module === 99 /* ExtJS */) {
+                    emitExtJSEnumDeclaration(node);
                     return;
                 }
                 if (!shouldHoistDeclarationInSystemJsModule(node)) {
@@ -28255,7 +28583,8 @@ var ts;
                     return emitOnlyPinnedOrTripleSlashComments(node);
                 }
                 var hoistedInDeclarationScope = shouldHoistDeclarationInSystemJsModule(node);
-                var emitVarForModule = !hoistedInDeclarationScope && !isModuleMergedWithES6Class(node);
+                var isExtJS = (compilerOptions.module === 99 /* ExtJS */);
+                var emitVarForModule = !hoistedInDeclarationScope && !isModuleMergedWithES6Class(node) && !isExtJS;
                 if (emitVarForModule) {
                     emitStart(node);
                     if (isES6ExportedDeclaration(node)) {
@@ -28267,12 +28596,14 @@ var ts;
                     emitEnd(node);
                     writeLine();
                 }
-                emitStart(node);
-                write("(function (");
-                emitStart(node.name);
-                write(getGeneratedNameForNode(node));
-                emitEnd(node.name);
-                write(") ");
+                if (!isExtJS) {
+                    emitStart(node);
+                    write("(function (");
+                    emitStart(node.name);
+                    write(getGeneratedNameForNode(node));
+                    emitEnd(node.name);
+                    write(") ");
+                }
                 if (node.body.kind === 207 /* ModuleBlock */) {
                     var saveTempFlags = tempFlags;
                     var saveTempVariables = tempVariables;
@@ -28283,39 +28614,45 @@ var ts;
                     tempVariables = saveTempVariables;
                 }
                 else {
-                    write("{");
-                    increaseIndent();
-                    scopeEmitStart(node);
-                    emitCaptureThisForNodeIfNecessary(node);
-                    writeLine();
-                    emit(node.body);
-                    decreaseIndent();
-                    writeLine();
-                    var moduleBlock = getInnerMostModuleDeclarationFromDottedModule(node).body;
-                    emitToken(15 /* CloseBraceToken */, moduleBlock.statements.end);
-                    scopeEmitEnd();
-                }
-                write(")(");
-                // write moduleDecl = containingModule.m only if it is not exported es6 module member
-                if ((node.flags & 1 /* Export */) && !isES6ExportedDeclaration(node)) {
-                    emit(node.name);
-                    write(" = ");
-                }
-                emitModuleMemberName(node);
-                write(" || (");
-                emitModuleMemberName(node);
-                write(" = {}));");
-                emitEnd(node);
-                if (!isES6ExportedDeclaration(node) && node.name.kind === 65 /* Identifier */ && node.parent === currentSourceFile) {
-                    if (compilerOptions.module === 4 /* System */ && (node.flags & 1 /* Export */)) {
+                    if (!isExtJS) {
+                        write("{");
+                        increaseIndent();
+                        scopeEmitStart(node);
+                        emitCaptureThisForNodeIfNecessary(node);
                         writeLine();
-                        write(exportFunctionForFile + "(\"");
-                        emitDeclarationName(node);
-                        write("\", ");
-                        emitDeclarationName(node);
-                        write(");");
                     }
-                    emitExportMemberAssignments(node.name);
+                    emit(node.body);
+                    if (!isExtJS) {
+                        decreaseIndent();
+                        writeLine();
+                        var moduleBlock = getInnerMostModuleDeclarationFromDottedModule(node).body;
+                        emitToken(15 /* CloseBraceToken */, moduleBlock.statements.end);
+                        scopeEmitEnd();
+                    }
+                }
+                if (!isExtJS) {
+                    write(")(");
+                    // write moduleDecl = containingModule.m only if it is not exported es6 module member
+                    if ((node.flags & 1 /* Export */) && !isES6ExportedDeclaration(node)) {
+                        emit(node.name);
+                        write(" = ");
+                    }
+                    emitModuleMemberName(node);
+                    write(" || (");
+                    emitModuleMemberName(node);
+                    write(" = {}));");
+                    emitEnd(node);
+                    if (!isES6ExportedDeclaration(node) && node.name.kind === 65 /* Identifier */ && node.parent === currentSourceFile) {
+                        if (compilerOptions.module === 4 /* System */ && (node.flags & 1 /* Export */)) {
+                            writeLine();
+                            write(exportFunctionForFile + "(\"");
+                            emitDeclarationName(node);
+                            write("\", ");
+                            emitDeclarationName(node);
+                            write(");");
+                        }
+                        emitExportMemberAssignments(node.name);
+                    }
                 }
             }
             function emitRequire(moduleName) {
@@ -29331,7 +29668,7 @@ var ts;
                 if (!compilerOptions.noEmitHelpers) {
                     // Only Emit __extends function when target ES5.
                     // For target ES6 and above, we can emit classDeclaration as is.
-                    if ((languageVersion < 2 /* ES6 */) && (!extendsEmitted && resolver.getNodeCheckFlags(node) & 8 /* EmitExtends */)) {
+                    if (compilerOptions.module !== 99 /* ExtJS */ && (languageVersion < 2 /* ES6 */) && (!extendsEmitted && resolver.getNodeCheckFlags(node) & 8 /* EmitExtends */)) {
                         writeLines(extendsHelper);
                         extendsEmitted = true;
                     }
@@ -30347,7 +30684,8 @@ var ts;
                 "commonjs": 1 /* CommonJS */,
                 "amd": 2 /* AMD */,
                 "system": 4 /* System */,
-                "umd": 3 /* UMD */
+                "umd": 3 /* UMD */,
+                "extjs": 99 /* ExtJS */
             },
             description: ts.Diagnostics.Specify_module_code_generation_Colon_commonjs_amd_system_or_umd,
             paramType: ts.Diagnostics.KIND,

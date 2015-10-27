@@ -1132,6 +1132,7 @@ declare module "typescript" {
         AMD = 2,
         UMD = 3,
         System = 4,
+        ExtJS = 99,
     }
     const enum NewLineKind {
         CarriageReturnLineFeed = 0,

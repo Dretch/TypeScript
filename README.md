@@ -1,80 +1,65 @@
-[![Build Status](https://travis-ci.org/Microsoft/TypeScript.svg?branch=master)](https://travis-ci.org/Microsoft/TypeScript)
-[![Issue Stats](http://issuestats.com/github/Microsoft/TypeScript/badge/pr)](http://issuestats.com/github/microsoft/typescript)
-[![Issue Stats](http://issuestats.com/github/Microsoft/TypeScript/badge/issue)](http://issuestats.com/github/microsoft/typescript)
-[![npm version](https://badge.fury.io/js/typescript.svg)](http://badge.fury.io/js/typescript)
-[![Downloads](http://img.shields.io/npm/dm/TypeScript.svg)](https://npmjs.org/package/typescript)
+TypeScript ExtJS Emitter
+======================
 
-# TypeScript
+A fork of Typescript 1.5 that emits classes in a way that ExtJS understands.
 
-[TypeScript](http://www.typescriptlang.org/) is a language for application-scale JavaScript. TypeScript adds optional types, classes, and modules to JavaScript. TypeScript supports tools for large-scale JavaScript applications for any browser, for any host, on any OS. TypeScript compiles to readable, standards-based JavaScript. Try it out at the [playground](http://www.typescriptlang.org/Playground), and stay up to date via [our blog](http://blogs.msdn.com/typescript) and [twitter account](https://twitter.com/typescriptlang).
+##Why?
 
+The Javascript emitted by the Typescript compiler is not compatible with the ExtJS class system. ExtJS requires classes to be defined using syntax like `Ext.define(CLASSNAME, MEMBERS);` but Typescript emits code based around prototypes.
 
-## Contribute
+This forked compiler emits code that looks just like the ExtJS classes you would write in regular Javascript.
 
-There are many ways to [contribute](https://github.com/Microsoft/TypeScript/blob/master/CONTRIBUTING.md) to TypeScript.
-* [Submit bugs](https://github.com/Microsoft/TypeScript/issues) and help us verify fixes as they are checked in.
-* Review the [source code changes](https://github.com/Microsoft/TypeScript/pulls).
-* Engage with other TypeScript users and developers on [StackOverflow](http://stackoverflow.com/questions/tagged/typescript). 
-* Join the [#typescript](http://twitter.com/#!/search/realtime/%23typescript) discussion on Twitter.
-* [Contribute bug fixes](https://github.com/Microsoft/TypeScript/blob/master/CONTRIBUTING.md).
-* Read the language specification ([docx](http://go.microsoft.com/fwlink/?LinkId=267121), [pdf](http://go.microsoft.com/fwlink/?LinkId=267238)).
+##ExtJS API Type Declarations
 
+To get the most use out of this compiler you will also need some type declarations (*.d.ts files) for the ExtJS API. There is a companion project to provide these: https://github.com/Dretch/typescript-declarations-for-ext
 
-## Documentation
+##Screenshot
+![ScreenShot](https://raw.github.com/fabioparra/TypeScriptExtJSEmitter/master/TypeScriptExtJSEmitter/images/screenshot.jpg)
 
-*  [Quick tutorial](http://www.typescriptlang.org/Tutorial)
-*  [Programming handbook](http://www.typescriptlang.org/Handbook)
-*  [Language specification](https://github.com/Microsoft/TypeScript/blob/master/doc/spec.md)
-*  [Homepage](http://www.typescriptlang.org/)
+##Demo
 
-## Building
+https://rawgithub.com/fabioparra/TypeScriptExtJSEmitter/master/TypeScriptExtJSEmitter/index.html
 
-In order to build the TypeScript compiler, ensure that you have [Git](http://git-scm.com/downloads) and [Node.js](http://nodejs.org/) installed.
+##Compatibility
 
-Clone a copy of the repo:
+This project is compatible with Typescript 1.5 / 1.4 and ExtJS 3, 4 and 5. The emitted classes can be processed by Sencha CMD.
 
+##Usage with Visual Studio 2015 (TypeScript 1.5)
+
+####Update tsc.js and typescriptServices.js files (used by visual studio editor and msbuild tasks )
+
+- Download latest modified compiler: https://github.com/fabioparra/TypeScript/releases/tag/v1.5
+- Run copy_to_vs2015.bat file as administrator
+
+##Usage with Visual Studio 2013 (TypeScript 1.4)
+
+####Update tsc.js and typescriptServices.js files (used by visual studio editor and msbuild tasks )
+
+- Install vs 2013 plugin: https://visualstudiogallery.msdn.microsoft.com/2d42d8dc-e085-45eb-a30b-3f7d50d55304
+- Download latest modified compiler: https://github.com/fabioparra/TypeScript/releases/tag/v1.4
+- Run copy_to_vs2013.bat file as administrator
+
+##Usage with IntelliJ IDEA
+
+IntelliJ IDEA 14 (Ultimate Edition only) has Typescript support. The ExtJS emitter can be used instead of the regular compiler.
+
+Follow the instructions for setting up regular Typescript support (https://www.jetbrains.com/idea/help/typescript-support.html) but ensure that you do the following:
+
+1.  Install `typescript-extjs` from NPM instead of `typescript`.
+
+2.  Edit the file watcher that IntelliJ creates for Typescript so that it uses the `tsc-extjs` executable rather than `tsc`, and use `-m extjs --sourcemap $FilePath$` as the program arguments.
+
+##Integration with Sencha CMD
+
+If you are using Sencha CMD, then you can add this snippet to your `build.xml` to compile all Typescript files to Javascript. The compilation will happen before any minification and combining of Javascript files.
+
+```xml
+<target name="-before-refresh">
+
+    <!-- compile Typescript to ExtJS-compatible Javascript -->
+    <apply executable="tsc-extjs" failonerror="true" verbose="true">
+        <fileset dir="${basedir}/app" includes="**/*.ts"/>
+    </apply>
+
+</target>
 ```
-git clone https://github.com/Microsoft/TypeScript.git
-```
-
-Change to the TypeScript directory:
-
-```
-cd TypeScript
-```
-
-Install Jake tools and dev dependencies:
-
-```
-npm install -g jake
-npm install
-```
-
-Use one of the following to build and test:
-
-```
-jake local            # Build the compiler into built/local 
-jake clean            # Delete the built compiler 
-jake LKG              # Replace the last known good with the built one.
-                      # Bootstrapping step to be executed when the built compiler reaches a stable state.
-jake tests            # Build the test infrastructure using the built compiler. 
-jake runtests         # Run tests using the built compiler and test infrastructure. 
-                      # You can override the host or specify a test for this command. 
-                      # Use host=<hostName> or tests=<testPath>. 
-jake runtests-browser # Runs the tests using the built run.js file. Syntax is jake runtests. Optional
-                        parameters 'host=', 'tests=[regex], reporter=[list|spec|json|<more>]'.
-jake baseline-accept  # This replaces the baseline test results with the results obtained from jake runtests. 
-jake -T               # List the above commands. 
-```
-
-
-## Usage
-
-```shell
-node built/local/tsc.js hello.ts
-```
-
-
-## Roadmap
-
-For details on our planned features and future direction please refer to our [roadmap](https://github.com/Microsoft/TypeScript/wiki/Roadmap).
