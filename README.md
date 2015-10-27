@@ -47,7 +47,7 @@ Follow the instructions for setting up regular Typescript support (https://www.j
 
 1.  Install `typescript-extjs` from NPM instead of `typescript`.
 
-2.  Edit the file watcher that IntelliJ creates for Typescript so that it uses the `tsc-extjs` executable rather than `tsc`
+2.  Edit the file watcher that IntelliJ creates for Typescript so that it uses the `tsc-extjs` executable rather than `tsc`, and use `-m extjs --sourcemap $FilePath$` as the program arguments.
 
 ##Integration with Sencha CMD
 
